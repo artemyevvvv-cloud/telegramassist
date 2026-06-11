@@ -1,0 +1,24 @@
+services:
+  telegram-bot:
+    build: ./src/bot
+    env_file: .env
+    environment:
+      - MEMORY_PATH=/app/memory
+      - DB_PATH=/app/logs.db
+    volumes:
+      - ./memory:/app/memory
+      - ./logs.db:/app/logs.db
+    restart: unless-stopped
+
+  mcp-server:
+    build: ./src/mcp
+    env_file: .env
+    environment:
+      - MEMORY_PATH=/app/memory
+      - DB_PATH=/app/logs.db
+    volumes:
+      - ./memory:/app/memory
+      - ./logs.db:/app/logs.db
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
