@@ -5,6 +5,7 @@ from datetime import datetime
 from fastmcp import FastMCP
 
 MEMORY_PATH = Path(os.environ.get("MEMORY_PATH", "./memory"))
+KB_PATH = Path(os.environ.get("KB_PATH", "./knowledge-base/aizdec"))
 DB_PATH = os.environ.get("DB_PATH", "./logs.db")
 
 mcp = FastMCP("telegramassist-memory")
@@ -67,6 +68,62 @@ def search_memory(query: str) -> list[dict]:
             lines = [l for l in text.splitlines() if query.lower() in l.lower()]
             matches.append({"file": rel, "matches": lines[:5]})
     return matches
+
+
+@mcp.tool()
+def search_knowledge_base(query: str, max_results: int = 3) -> list[dict]:
+    """Search aizdec course lessons by keywords. Returns lesson title, course, and full content."""
+    if not KB_PATH.exists():
+        return [{"error": "Knowledge base not found"}]
+
+    query_words = [w.lower() for w in query.split() if len(w) > 2]
+    if not query_words:
+        return []
+
+    scored = []
+    for path in KB_PATH.rglob("*.md"):
+        if path.name == "index.md":
+            continue
+        text = path.read_text(encoding="utf-8")
+        text_lower = text.lower()
+        score = sum(text_lower.count(w) for w in query_words)
+        if score > 0:
+            lines = text.splitlines()
+            title = lines[0].lstrip("# ").strip() if lines else path.stem
+            course = path.parent.name
+            scored.append({"score": score, "title": title, "course": course, "content": text, "path": str(path)})
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return [
+        {"title": r["title"], "course": r["course"], "content": r["content"]}
+        for r in scored[:max_results]
+    ]
+
+
+@mcp.tool()
+def list_knowledge_base() -> dict[str, list[str]]:
+    """List all available course lessons grouped by course."""
+    if not KB_PATH.exists():
+        return {}
+    result = {}
+    for course_dir in sorted(KB_PATH.iterdir()):
+        if course_dir.is_dir():
+            lessons = []
+            for f in sorted(course_dir.glob("*.md")):
+                text = f.read_text(encoding="utf-8", errors="ignore")
+                title = text.splitlines()[0].lstrip("# ").strip() if text else f.stem
+                lessons.append(title)
+            result[course_dir.name] = lessons
+    return result
+
+
+@mcp.tool()
+def get_lesson(course: str, slug: str) -> str:
+    """Get full content of a specific lesson. E.g. course='claude-code', slug='what-is-claude-code'."""
+    path = KB_PATH / course / f"{slug}.md"
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return f"[Урок не найден: {course}/{slug}]"
 
 
 @mcp.tool()

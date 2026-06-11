@@ -1,6 +1,7 @@
 import io
 import logging
 import os
+from pathlib import Path
 from groq import Groq
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes
@@ -12,11 +13,44 @@ ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
 
 groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
 MODEL = "llama-3.3-70b-versatile"
+KB_PATH = Path(os.environ.get("KB_PATH", "./knowledge-base/aizdec"))
 
 SYSTEM_PROMPT = """Ты личный ассистент. Ты знаешь историю пользователя и помогаешь отслеживать прогресс в обучении вайбкодингу и личные цели. Отвечай кратко и по делу. Говори на русском.
 
 Контекст о пользователе:
-{context}"""
+{context}
+
+{kb_section}"""
+
+
+def search_kb(query: str, max_results: int = 2) -> str:
+    """Ищет релевантные уроки в knowledge-base и возвращает их контент."""
+    if not KB_PATH.exists():
+        return ""
+    words = [w.lower() for w in query.split() if len(w) > 2]
+    if not words:
+        return ""
+
+    scored = []
+    for path in KB_PATH.rglob("*.md"):
+        if path.name == "index.md":
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        score = sum(text.lower().count(w) for w in words)
+        if score > 0:
+            scored.append((score, text))
+
+    scored.sort(reverse=True)
+    top = scored[:max_results]
+    if not top:
+        return ""
+
+    parts = ["=== Материалы из базы знаний курсов ==="]
+    for _, content in top:
+        # Берём первые 1500 символов чтобы не раздувать контекст
+        parts.append(content[:1500].strip())
+        parts.append("---")
+    return "\n".join(parts)
 
 MENU = ReplyKeyboardMarkup(
     [
@@ -35,10 +69,11 @@ def is_allowed(update: Update) -> bool:
 
 def ask_groq(user_message: str) -> str:
     ctx = read_context()
+    kb = search_kb(user_message)
     response = groq_client.chat.completions.create(
         model=MODEL,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT.format(context=ctx)},
+            {"role": "system", "content": SYSTEM_PROMPT.format(context=ctx, kb_section=kb)},
             {"role": "user", "content": user_message},
         ],
     )
