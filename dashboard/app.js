@@ -1,8 +1,7 @@
 /* ─── Config ──────────────────────────────────────────────────────────── */
-const GITHUB_RAW = 'https://raw.githubusercontent.com/artemyevvvv-cloud/telegramassist/main';
 const FILES = {
-  learning: `${GITHUB_RAW}/memory/compiled/learning.md`,
-  goals:    `${GITHUB_RAW}/memory/compiled/goals.md`,
+  learning: '/api/memory?file=learning',
+  goals:    '/api/memory?file=goals',
 };
 
 const DAY_NAMES = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
