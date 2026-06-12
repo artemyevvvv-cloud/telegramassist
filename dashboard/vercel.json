@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/memory.js": {
+      "runtime": "nodejs20.x"
+    }
+  }
+}
