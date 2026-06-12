@@ -1,8 +1,8 @@
 import asyncio
 import logging
 import os
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
-from handlers import cmd_start, handle_message, handle_voice
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+from handlers import cmd_start, handle_message, handle_voice, handle_callback
 from scheduler import setup_scheduler
 
 logging.basicConfig(
@@ -16,6 +16,7 @@ def main():
     app = Application.builder().token(token).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

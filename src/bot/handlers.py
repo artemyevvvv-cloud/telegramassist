@@ -3,7 +3,7 @@ import logging
 import os
 from pathlib import Path
 from groq import Groq
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from memory import read_context, append_to_log
 
@@ -57,10 +57,60 @@ MENU = ReplyKeyboardMarkup(
         [KeyboardButton("📊 Прогресс"), KeyboardButton("📅 План")],
         [KeyboardButton("🔥 Стрик"), KeyboardButton("✅ Стрик +1")],
         [KeyboardButton("🧠 Запомнить"), KeyboardButton("🗑️ Забыть")],
+        [KeyboardButton("📚 Курсы")],
     ],
     resize_keyboard=True,
     is_persistent=True,
 )
+
+COURSE_NAMES = {
+    "claude-code":       "Claude Code",
+    "publish":           "Публикация проекта",
+    "n8n-mcp":           "N8N + Claude Code",
+    "tuning-claude-code": "Тюнинг Claude",
+    "constructor":       "Constructor (бета)",
+}
+
+MAX_MSG = 3800  # Telegram limit is 4096, leave room for headers
+
+
+def _lesson_title(path: Path) -> str:
+    """Extract title from first line of lesson markdown file."""
+    try:
+        first = path.read_text(encoding="utf-8", errors="ignore").splitlines()[0]
+        return first.lstrip("# ").strip()
+    except Exception:
+        return path.stem
+
+
+def kb_courses_keyboard() -> InlineKeyboardMarkup:
+    buttons = []
+    for slug, name in COURSE_NAMES.items():
+        course_dir = KB_PATH / slug
+        if course_dir.exists():
+            count = len(list(course_dir.glob("*.md")))
+            buttons.append([InlineKeyboardButton(f"{name} ({count})", callback_data=f"kb_ls:{slug}")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def kb_lessons_keyboard(course: str) -> InlineKeyboardMarkup:
+    course_dir = KB_PATH / course
+    buttons = []
+    for f in sorted(course_dir.glob("*.md")):
+        title = _lesson_title(f)
+        slug = f.stem
+        # Callback data limit is 64 bytes
+        cb = f"kb_rd:{course}:{slug}"
+        if len(cb.encode()) <= 64:
+            buttons.append([InlineKeyboardButton(title, callback_data=cb)])
+    buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="kb_courses")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def kb_lesson_keyboard(course: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("⬅️ Назад к урокам", callback_data=f"kb_ls:{course}")
+    ]])
 
 
 def is_allowed(update: Update) -> bool:
@@ -113,6 +163,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        if text == "📚 Курсы":
+            await update.message.reply_text(
+                "Выбери курс:",
+                reply_markup=kb_courses_keyboard(),
+            )
+            return
+
         if text == "📊 Прогресс":
             reply = ask_groq(
                 "Покажи мой текущий прогресс по вайбкодингу: что пройдено, streak, оценки понимания."
@@ -157,6 +214,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.exception("Ошибка в handle_message: %s", e)
         await update.message.reply_text(f"⚠️ Ошибка: {e}", reply_markup=MENU)
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if not query or query.from_user.id != ALLOWED_USER_ID:
+        return
+    await query.answer()
+    data = query.data
+
+    if data == "kb_courses":
+        await query.edit_message_text("Выбери курс:", reply_markup=kb_courses_keyboard())
+
+    elif data.startswith("kb_ls:"):
+        course = data[len("kb_ls:"):]
+        name = COURSE_NAMES.get(course, course)
+        await query.edit_message_text(
+            f"📖 {name}\n\nВыбери урок:",
+            reply_markup=kb_lessons_keyboard(course),
+        )
+
+    elif data.startswith("kb_rd:"):
+        _, course, slug = data.split(":", 2)
+        path = KB_PATH / course / f"{slug}.md"
+        if not path.exists():
+            await query.edit_message_text("⚠️ Урок не найден.", reply_markup=kb_lesson_keyboard(course))
+            return
+        content = path.read_text(encoding="utf-8", errors="ignore")
+        if len(content) > MAX_MSG:
+            content = content[:MAX_MSG] + f"\n\n_...текст обрезан. Читай полностью: https://www.aizdec.me/courses/{course}/{slug}_"
+        await query.edit_message_text(
+            content,
+            reply_markup=kb_lesson_keyboard(course),
+            parse_mode="Markdown",
+        )
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
