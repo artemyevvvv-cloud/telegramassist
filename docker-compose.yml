@@ -5,9 +5,12 @@ services:
     environment:
       - MEMORY_PATH=/app/memory
       - KB_PATH=/app/knowledge-base/aizdec
+      - GITHUB_REPO_URL=${GITHUB_REPO_URL}
+      - DASHBOARD_URL=${DASHBOARD_URL}
     volumes:
       - ./memory:/app/memory
       - ./knowledge-base:/app/knowledge-base
+      - ./.git:/app/.git
     restart: unless-stopped
 
   mcp-server:
