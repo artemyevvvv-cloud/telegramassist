@@ -1,15 +1,17 @@
 import io
 import logging
 import os
+import subprocess
 from pathlib import Path
 from groq import Groq
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from memory import read_context, append_to_log, update_streak
 
 logger = logging.getLogger(__name__)
 
 ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "")
 
 groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
 MODEL = "llama-3.3-70b-versatile"
@@ -51,16 +53,18 @@ def search_kb(query: str, max_results: int = 2) -> str:
         parts.append("---")
     return "\n".join(parts)
 
-MENU = ReplyKeyboardMarkup(
-    [
+def _build_menu() -> ReplyKeyboardMarkup:
+    rows = [
         [KeyboardButton("📊 Прогресс"), KeyboardButton("📅 План")],
         [KeyboardButton("🔥 Стрик"), KeyboardButton("✅ Стрик +1")],
         [KeyboardButton("🧠 Запомнить"), KeyboardButton("🗑️ Забыть")],
-        [KeyboardButton("📚 Курсы")],
-    ],
-    resize_keyboard=True,
-    is_persistent=True,
-)
+        [KeyboardButton("📚 Курсы"), KeyboardButton("🚀 Обновить дашборд")],
+    ]
+    if DASHBOARD_URL:
+        rows.append([KeyboardButton("📱 Дашборд", web_app=WebAppInfo(url=DASHBOARD_URL))])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, is_persistent=True)
+
+MENU = _build_menu()
 
 COURSE_NAMES = {
     "claude-code":       "Claude Code",
@@ -168,6 +172,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        if text == "🚀 Обновить дашборд":
+            append_to_log("**Кнопка:** 🚀 Обновить дашборд")
+            repo_url = os.environ.get("GITHUB_REPO_URL", "")
+            if not repo_url:
+                await update.message.reply_text("⚠️ GITHUB_REPO_URL не настроен.", reply_markup=MENU)
+                return
+            try:
+                subprocess.run(["git", "-C", "/app", "add", "memory/"], check=True, capture_output=True)
+                commit = subprocess.run(
+                    ["git", "-C", "/app", "commit", "-m", "bot: update memory"],
+                    capture_output=True,
+                )
+                if commit.returncode not in (0, 1):
+                    raise RuntimeError("git commit failed")
+                subprocess.run(["git", "-C", "/app", "push", repo_url, "main"], check=True, capture_output=True)
+                await update.message.reply_text("✅ Дашборд обновлён — данные памяти отправлены на GitHub.", reply_markup=MENU)
+            except Exception:
+                logger.exception("Ошибка обновления дашборда")
+                await update.message.reply_text("⚠️ Не удалось обновить дашборд. Проверь логи.", reply_markup=MENU)
+            return
+
         if text == "📚 Курсы":
             append_to_log("**Кнопка:** 📚 Курсы")
             await update.message.reply_text(
@@ -265,18 +290,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if current:
             chunks.append("".join(current))
 
-        await query.edit_message_text(
-            chunks[0],
-            reply_markup=None if len(chunks) > 1 else kb_lesson_keyboard(course),
-            parse_mode="Markdown",
-        )
+        kb_first = None if len(chunks) > 1 else kb_lesson_keyboard(course)
+        try:
+            await query.edit_message_text(chunks[0], reply_markup=kb_first, parse_mode="Markdown")
+        except Exception:
+            await query.edit_message_text(chunks[0], reply_markup=kb_first)
+
         for i, chunk in enumerate(chunks[1:], start=1):
             is_last = (i == len(chunks) - 1)
-            await query.message.reply_text(
-                chunk,
-                reply_markup=kb_lesson_keyboard(course) if is_last else None,
-                parse_mode="Markdown",
-            )
+            kb = kb_lesson_keyboard(course) if is_last else None
+            try:
+                await query.message.reply_text(chunk, reply_markup=kb, parse_mode="Markdown")
+            except Exception:
+                await query.message.reply_text(chunk, reply_markup=kb)
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
