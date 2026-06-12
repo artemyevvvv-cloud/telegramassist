@@ -1,8 +1,7 @@
 {
   "functions": {
     "api/memory.js": {
-      "memory": 128,
-      "maxDuration": 10
+      "runtime": "edge"
     }
   }
 }

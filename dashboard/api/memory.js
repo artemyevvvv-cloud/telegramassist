@@ -1,14 +1,17 @@
+export const config = { runtime: 'edge' };
+
 const FILES = {
   learning: 'memory/compiled/learning.md',
   goals:    'memory/compiled/goals.md',
 };
 
-module.exports = async function handler(req, res) {
-  const { file } = req.query;
+export default async function handler(request) {
+  const { searchParams } = new URL(request.url);
+  const file = searchParams.get('file');
   const path = FILES[file];
 
   if (!path) {
-    return res.status(400).send('');
+    return new Response('', { status: 400 });
   }
 
   const token = process.env.GITHUB_TOKEN;
@@ -20,14 +23,17 @@ module.exports = async function handler(req, res) {
     });
 
     if (!upstream.ok) {
-      return res.status(200).send('');
+      return new Response('', { status: 200 });
     }
 
     const text = await upstream.text();
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    return res.status(200).send(text);
+    return new Response(text, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
+    });
   } catch {
-    return res.status(200).send('');
+    return new Response('', { status: 200 });
   }
 }
