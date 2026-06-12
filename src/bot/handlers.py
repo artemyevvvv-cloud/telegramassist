@@ -5,7 +5,7 @@ from pathlib import Path
 from groq import Groq
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from memory import read_context, append_to_log
+from memory import read_context, append_to_log, update_streak
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,6 @@ def search_kb(query: str, max_results: int = 2) -> str:
 
     parts = ["=== Материалы из базы знаний курсов ==="]
     for _, content in top:
-        # Берём первые 1500 символов чтобы не раздувать контекст
         parts.append(content[:1500].strip())
         parts.append("---")
     return "\n".join(parts)
@@ -71,11 +70,10 @@ COURSE_NAMES = {
     "constructor":       "Constructor (бета)",
 }
 
-MAX_MSG = 3800  # Telegram limit is 4096, leave room for headers
+MAX_MSG = 3800
 
 
 def _lesson_title(path: Path) -> str:
-    """Extract title from first line of lesson markdown file."""
     try:
         first = path.read_text(encoding="utf-8", errors="ignore").splitlines()[0]
         return first.lstrip("# ").strip()
@@ -99,7 +97,6 @@ def kb_lessons_keyboard(course: str) -> InlineKeyboardMarkup:
     for f in sorted(course_dir.glob("*.md")):
         title = _lesson_title(f)
         slug = f.stem
-        # Callback data limit is 64 bytes
         cb = f"kb_rd:{course}:{slug}"
         if len(cb.encode()) <= 64:
             buttons.append([InlineKeyboardButton(title, callback_data=cb)])
@@ -128,6 +125,14 @@ def ask_groq(user_message: str) -> str:
         ],
     )
     return response.choices[0].message.content
+
+
+async def _reply_md(update: Update, text: str, **kwargs):
+    """Отправляет ответ с Markdown, при ошибке парсинга — plain text."""
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown", **kwargs)
+    except Exception:
+        await update.message.reply_text(text, **kwargs)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,6 +169,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if text == "📚 Курсы":
+            append_to_log("**Кнопка:** 📚 Курсы")
             await update.message.reply_text(
                 "Выбери курс:",
                 reply_markup=kb_courses_keyboard(),
@@ -174,14 +180,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = ask_groq(
                 "Покажи мой текущий прогресс по вайбкодингу: что пройдено, streak, оценки понимания."
             )
-            await update.message.reply_text(reply, reply_markup=MENU)
+            append_to_log(f"**Кнопка:** 📊 Прогресс\n**Bot:** {reply}")
+            await _reply_md(update, reply, reply_markup=MENU)
             return
 
         if text == "📅 План":
             reply = ask_groq(
                 "Помоги составить план на сегодня с учётом моих целей и прогресса в учёбе."
             )
-            await update.message.reply_text(reply, reply_markup=MENU)
+            append_to_log(f"**Кнопка:** 📅 План\n**Bot:** {reply}")
+            await _reply_md(update, reply, reply_markup=MENU)
             return
 
         if text == "🔥 Стрик":
@@ -189,10 +197,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Посчитай мой текущий streak по логам: сколько дней подряд я занимался? "
                 "Считай строки '**Стрик:** день учёбы засчитан' и записи об учёбе в логах."
             )
-            await update.message.reply_text(reply, reply_markup=MENU)
+            append_to_log(f"**Кнопка:** 🔥 Стрик\n**Bot:** {reply}")
+            await _reply_md(update, reply, reply_markup=MENU)
             return
 
         if text == "✅ Стрик +1":
+            update_streak()
             append_to_log("**Стрик:** день учёбы засчитан ✅")
             await update.message.reply_text("День засчитан! Стрик продолжается 🔥", reply_markup=MENU)
             return
@@ -209,7 +219,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         reply = ask_groq(text)
         append_to_log(f"**User:** {text}\n**Bot:** {reply}")
-        await update.message.reply_text(reply, reply_markup=MENU)
+        await _reply_md(update, reply, reply_markup=MENU)
 
     except Exception as e:
         logger.exception("Ошибка в handle_message: %s", e)
@@ -242,7 +252,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         content = path.read_text(encoding="utf-8", errors="ignore")
 
-        # Разбиваем на чанки по MAX_MSG символов, не разрывая строки
         chunks = []
         current = []
         current_len = 0
@@ -256,13 +265,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if current:
             chunks.append("".join(current))
 
-        # Первый чанк — редактируем исходное сообщение
         await query.edit_message_text(
             chunks[0],
             reply_markup=None if len(chunks) > 1 else kb_lesson_keyboard(course),
             parse_mode="Markdown",
         )
-        # Остальные чанки — новые сообщения
         for i, chunk in enumerate(chunks[1:], start=1):
             is_last = (i == len(chunks) - 1)
             await query.message.reply_text(
@@ -294,7 +301,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         reply = ask_groq(text)
         append_to_log(f"**Voice:** {text}\n**Bot:** {reply}")
-        await update.message.reply_text(reply, reply_markup=MENU)
+        await _reply_md(update, reply, reply_markup=MENU)
 
     except Exception as e:
         logger.exception("Ошибка в handle_voice: %s", e)

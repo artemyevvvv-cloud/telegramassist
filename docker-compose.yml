@@ -4,10 +4,10 @@ services:
     env_file: .env
     environment:
       - MEMORY_PATH=/app/memory
-      - DB_PATH=/app/logs.db
+      - KB_PATH=/app/knowledge-base/aizdec
     volumes:
       - ./memory:/app/memory
-      - ./logs.db:/app/logs.db
+      - ./knowledge-base:/app/knowledge-base
     restart: unless-stopped
 
   mcp-server:
@@ -15,10 +15,12 @@ services:
     env_file: .env
     environment:
       - MEMORY_PATH=/app/memory
-      - DB_PATH=/app/logs.db
+      - KB_PATH=/app/knowledge-base/aizdec
+      - DB_PATH=/app/data/logs.db
     volumes:
       - ./memory:/app/memory
-      - ./logs.db:/app/logs.db
+      - ./knowledge-base:/app/knowledge-base
+      - ./data:/app/data
     ports:
       - "8000:8000"
     restart: unless-stopped
