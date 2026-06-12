@@ -3,7 +3,7 @@ const FILES = {
   goals:    'memory/compiled/goals.md',
 };
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   const { file } = req.query;
   const path = FILES[file];
 
