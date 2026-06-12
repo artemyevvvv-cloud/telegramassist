@@ -13,7 +13,7 @@ ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
 
 groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
 MODEL = "llama-3.3-70b-versatile"
-KB_PATH = Path(os.environ.get("KB_PATH", "./knowledge-base/aizdec"))
+KB_PATH = Path(os.environ.get("KB_PATH", str(Path(__file__).parent.parent.parent / "knowledge-base" / "aizdec")))
 
 SYSTEM_PROMPT = """Ты личный ассистент. Ты знаешь историю пользователя и помогаешь отслеживать прогресс в обучении вайбкодингу и личные цели. Отвечай кратко и по делу. Говори на русском.
 
@@ -241,13 +241,35 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("⚠️ Урок не найден.", reply_markup=kb_lesson_keyboard(course))
             return
         content = path.read_text(encoding="utf-8", errors="ignore")
-        if len(content) > MAX_MSG:
-            content = content[:MAX_MSG] + f"\n\n_...текст обрезан. Читай полностью: https://www.aizdec.me/courses/{course}/{slug}_"
+
+        # Разбиваем на чанки по MAX_MSG символов, не разрывая строки
+        chunks = []
+        current = []
+        current_len = 0
+        for line in content.splitlines(keepends=True):
+            if current_len + len(line) > MAX_MSG and current:
+                chunks.append("".join(current))
+                current = []
+                current_len = 0
+            current.append(line)
+            current_len += len(line)
+        if current:
+            chunks.append("".join(current))
+
+        # Первый чанк — редактируем исходное сообщение
         await query.edit_message_text(
-            content,
-            reply_markup=kb_lesson_keyboard(course),
+            chunks[0],
+            reply_markup=None if len(chunks) > 1 else kb_lesson_keyboard(course),
             parse_mode="Markdown",
         )
+        # Остальные чанки — новые сообщения
+        for i, chunk in enumerate(chunks[1:], start=1):
+            is_last = (i == len(chunks) - 1)
+            await query.message.reply_text(
+                chunk,
+                reply_markup=kb_lesson_keyboard(course) if is_last else None,
+                parse_mode="Markdown",
+            )
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
