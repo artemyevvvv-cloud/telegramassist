@@ -67,6 +67,52 @@ def update_streak():
     path.write_text(content, encoding="utf-8")
 
 
+_MODULE_NAMES = {
+    1: "Старт и первый код",
+    2: "Как правильно говорить с агентом",
+    3: "Документ, который спасает проект от хаоса",
+    4: "Сохраняем работу и выкладываем в интернет",
+    5: "Даём агенту суперсилы",
+    6: "Автономная работа агента",
+    7: "Выкладываем продукт в интернет",
+    8: "База данных",
+    9: "Подключение оплат",
+}
+
+
+def parse_module_progress(text: str) -> tuple[int, int] | None:
+    """Извлекает (модуль, урок) из текста типа '9 модуль 2 урок'. Возвращает None если не найдено."""
+    low = text.lower()
+    m = re.search(r'(\d+)\s*(?:модул[ьея]|module)', low)
+    if not m:
+        return None
+    mod = int(m.group(1))
+    if mod not in _MODULE_NAMES:
+        return None
+    l = re.search(r'(\d+)\s*(?:урок|lesson)', low)
+    lesson = int(l.group(1)) if l else 1
+    return mod, lesson
+
+
+def update_learning_status(module: int, lesson: int) -> bool:
+    """Обновляет '## Текущий статус' в learning.md. Возвращает True если изменение сделано."""
+    path = MEMORY_PATH / "compiled" / "learning.md"
+    if not path.exists():
+        return False
+    content = path.read_text(encoding="utf-8")
+    name = _MODULE_NAMES.get(module, f"Модуль {module}")
+    new_status = f"## Текущий статус\nНачат Модуль {module} — «{name}», Урок {lesson}"
+    new_content = re.sub(
+        r'## Текущий статус\n.*',
+        new_status,
+        content,
+    )
+    if new_content == content:
+        return False
+    path.write_text(new_content, encoding="utf-8")
+    return True
+
+
 _LEARNING_KEYWORDS = (
     "урок", "учился", "учился", "изучил", "прошел", "прошёл", "завершил",
     "посмотрел", "курс", "модул", "научился", "разобрался", "вайбкодинг",

@@ -6,7 +6,7 @@ from pathlib import Path
 from groq import Groq
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from memory import read_context, append_to_log, update_streak, detect_workout_day, mark_workout_done, detect_learning, detect_work
+from memory import read_context, append_to_log, update_streak, detect_workout_day, mark_workout_done, detect_learning, detect_work, parse_module_progress, update_learning_status
 from db import init_db, log_message
 
 init_db()
@@ -356,6 +356,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             push_files = ["memory/raw/"]
             if detect_learning(text):
                 update_streak()
+                progress = parse_module_progress(text)
+                if progress:
+                    update_learning_status(*progress)
                 push_files.append("memory/compiled/learning.md")
             if detect_work(text):
                 push_files.append("memory/compiled/goals.md")
@@ -458,6 +461,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             push_files = ["memory/raw/"]
             if detect_learning(text):
                 update_streak()
+                progress = parse_module_progress(text)
+                if progress:
+                    update_learning_status(*progress)
                 push_files.append("memory/compiled/learning.md")
             if detect_work(text):
                 push_files.append("memory/compiled/goals.md")
