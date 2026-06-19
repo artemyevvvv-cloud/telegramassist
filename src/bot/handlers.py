@@ -118,6 +118,21 @@ def kb_lesson_keyboard(course: str) -> InlineKeyboardMarkup:
     ]])
 
 
+def _git_push(files: list[str], label: str):
+    repo_url = os.environ.get("GITHUB_REPO_URL", "")
+    if not repo_url:
+        return
+    try:
+        subprocess.run(["git", "-C", GIT_ROOT, "add"] + files, check=True, capture_output=True)
+        diff = subprocess.run(["git", "-C", GIT_ROOT, "diff", "--staged", "--quiet"], capture_output=True)
+        if diff.returncode == 0:
+            return  # нечего коммитить
+        subprocess.run(["git", "-C", GIT_ROOT, "commit", "-m", f"bot: {label}"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", GIT_ROOT, "push", repo_url, "main"], check=True, capture_output=True)
+    except Exception:
+        logger.exception("Ошибка git push (%s)", label)
+
+
 def is_allowed(update: Update) -> bool:
     return update.effective_user.id == ALLOWED_USER_ID
 
@@ -298,6 +313,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 update_streak()
                 append_to_log("**Стрик:** день учёбы засчитан ✅")
+                _git_push(["memory/compiled/learning.md", "memory/raw/"], "streak +1")
                 await update.message.reply_text("День засчитан! Стрик продолжается 🔥", reply_markup=MENU)
                 log_message(user.id, uname, fname, "button", "✅ Стрик +1", "День засчитан! 🔥")
             return
@@ -319,14 +335,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             day = detect_workout_day(text)
             if day and mark_workout_done(day):
                 append_to_log(f"**Тренировка:** {day} отмечена ✅")
-                try:
-                    subprocess.run(["git", "-C", GIT_ROOT, "add", "memory/compiled/goals.md"], check=True, capture_output=True)
-                    subprocess.run(["git", "-C", GIT_ROOT, "commit", "-m", f"bot: mark workout {day} done"], check=True, capture_output=True)
-                    repo_url = os.environ.get("GITHUB_REPO_URL", "")
-                    if repo_url:
-                        subprocess.run(["git", "-C", GIT_ROOT, "push", repo_url, "main"], check=True, capture_output=True)
-                except Exception:
-                    logger.exception("Ошибка git push после отметки тренировки")
+                _git_push(["memory/compiled/goals.md", "memory/raw/"], f"mark workout {day} done")
                 reply_text = f"✅ Тренировка в {day} отмечена в дашборде!"
                 log_message(user.id, uname, fname, "workout", text, reply_text)
                 await update.message.reply_text(reply_text, reply_markup=MENU)
@@ -335,6 +344,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = ask_groq(text, demo=demo)
         if not demo:
             append_to_log(f"**User:** {text}\n**Bot:** {reply}")
+            _git_push(["memory/raw/"], "sync raw log")
         log_message(user.id, uname, fname, "message" if not demo else "demo", text, reply)
         await _reply_md(update, reply, reply_markup=MENU)
 
@@ -416,6 +426,16 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = transcription.text
 
         await update.message.reply_text(f"🗣️ {text}", reply_markup=MENU)
+
+        if not demo:
+            day = detect_workout_day(text)
+            if day and mark_workout_done(day):
+                append_to_log(f"**Тренировка (голос):** {day} отмечена ✅")
+                _git_push(["memory/compiled/goals.md", "memory/raw/"], f"mark workout {day} done")
+                reply_text = f"✅ Тренировка в {day} отмечена в дашборде!"
+                log_message(user.id, user.username or "", user.full_name or "", "workout_voice", text, reply_text)
+                await update.message.reply_text(reply_text, reply_markup=MENU)
+                return
 
         reply = ask_groq(text, demo=demo)
         if not demo:
