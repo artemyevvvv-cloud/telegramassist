@@ -3,7 +3,8 @@ import re
 from pathlib import Path
 from datetime import datetime, timedelta
 
-MEMORY_PATH = Path(os.environ.get("MEMORY_PATH", "./memory"))
+_DEFAULT_MEMORY = Path(__file__).resolve().parent.parent.parent / "memory"
+MEMORY_PATH = Path(os.environ.get("MEMORY_PATH", str(_DEFAULT_MEMORY)))
 
 
 def read_context() -> str:
@@ -64,6 +65,45 @@ def update_streak():
         content = content.replace(date_match.group(0), f"Последний день учёбы: {today}")
 
     path.write_text(content, encoding="utf-8")
+
+
+_DAY_ALIASES = {
+    "пн": "Пн", "понедельник": "Пн", "понедельника": "Пн",
+    "вт": "Вт", "вторник": "Вт", "вторника": "Вт",
+    "ср": "Ср", "среда": "Ср", "среду": "Ср", "среды": "Ср",
+    "чт": "Чт", "четверг": "Чт", "четверга": "Чт",
+    "пт": "Пт", "пятница": "Пт", "пятницу": "Пт", "пятницы": "Пт",
+    "сб": "Сб", "суббота": "Сб", "субботу": "Сб", "субботы": "Сб",
+    "вс": "Вс", "воскресенье": "Вс", "воскресенья": "Вс",
+}
+
+
+def detect_workout_day(text: str) -> str | None:
+    """Возвращает аббревиатуру дня если в тексте есть упоминание тренировки+дня, иначе None."""
+    low = text.lower()
+    workout_keywords = ("тренировк", "пробежк", "бег", "сделал", "выполнил", "закончил", "готово", "✅", "забег")
+    has_workout = any(k in low for k in workout_keywords)
+    if not has_workout:
+        return None
+    for alias, abbr in _DAY_ALIASES.items():
+        if re.search(r'\b' + alias + r'\b', low):
+            return abbr
+    return None
+
+
+def mark_workout_done(day_abbr: str) -> bool:
+    """Ставит ✅ для указанного дня в таблице тренировок goals.md. Возвращает True если изменение сделано."""
+    path = MEMORY_PATH / "compiled" / "goals.md"
+    if not path.exists():
+        return False
+    content = path.read_text(encoding="utf-8")
+    # Заменяем ❌ на ✅ только в строке с нужным днём
+    pattern = rf'(\|\s*{re.escape(day_abbr)}\s*\|[^|]+\|)\s*❌\s*(\|)'
+    new_content = re.sub(pattern, r'\1 ✅ \2', content)
+    if new_content == content:
+        return False
+    path.write_text(new_content, encoding="utf-8")
+    return True
 
 
 def read_compiled(filename: str) -> str:

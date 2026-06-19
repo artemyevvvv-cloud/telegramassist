@@ -6,12 +6,16 @@ from pathlib import Path
 from groq import Groq
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from memory import read_context, append_to_log, update_streak
+from memory import read_context, append_to_log, update_streak, detect_workout_day, mark_workout_done
+from db import init_db, log_message
+
+init_db()
 
 logger = logging.getLogger(__name__)
 
 ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "")
+GIT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
 
 groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
 MODEL = "llama-3.3-70b-versatile"
@@ -118,17 +122,45 @@ def is_allowed(update: Update) -> bool:
     return update.effective_user.id == ALLOWED_USER_ID
 
 
-def ask_groq(user_message: str) -> str:
-    ctx = read_context()
-    kb = search_kb(user_message)
-    response = groq_client.chat.completions.create(
-        model=MODEL,
-        messages=[
+DEMO_SYSTEM_PROMPT = """Ты демо-версия персонального Telegram-бота ассистента для вайбкодинга.
+Отвечай кратко, дружелюбно, на русском. Объясни что этот бот умеет делать для своего владельца.
+Не придумывай личные данные пользователя — это демо без реальной памяти."""
+
+
+def ask_groq(user_message: str, demo: bool = False) -> str:
+    if demo:
+        system = DEMO_SYSTEM_PROMPT
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_message},
+        ]
+    else:
+        ctx = read_context()
+        kb = search_kb(user_message)
+        messages = [
             {"role": "system", "content": SYSTEM_PROMPT.format(context=ctx, kb_section=kb)},
             {"role": "user", "content": user_message},
-        ],
+        ]
+    response = groq_client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
     )
     return response.choices[0].message.content
+
+
+VISITORS_LOG = Path(__file__).resolve().parent.parent.parent / "memory" / "raw" / "visitors.md"
+
+
+def log_visitor(update: Update):
+    user = update.effective_user
+    uid = user.id
+    username = f"@{user.username}" if user.username else "—"
+    name = user.full_name or "—"
+    timestamp = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M")
+    VISITORS_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(VISITORS_LOG, "a", encoding="utf-8") as f:
+        f.write(f"\n- {timestamp} | id: `{uid}` | {username} | {name}")
+    log_message(uid, username, name, "visitor", "/start")
 
 
 async def _reply_md(update: Update, text: str, **kwargs):
@@ -140,8 +172,17 @@ async def _reply_md(update: Update, text: str, **kwargs):
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
     if not is_allowed(update):
+        log_visitor(update)
+        name = user.first_name or user.username or "друг"
+        await update.message.reply_text(
+            f"👋 Привет, {name}! Это демо-версия персонального бота-ассистента для вайбкодинга.\n\n"
+            "Можешь потыкать кнопки — покажу что умею 👇",
+            reply_markup=MENU,
+        )
         return
+    log_message(user.id, user.username or "", user.full_name or "", "start", "/start")
     await update.message.reply_text(
         "Привет! Выбери действие из меню или просто напиши сообщение.",
         reply_markup=MENU,
@@ -149,9 +190,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_allowed(update):
-        logger.warning("Blocked user %s", update.effective_user.id)
-        return
+    demo = not is_allowed(update)
+    user = update.effective_user
+    uname = user.username or ""
+    fname = user.full_name or ""
 
     text = update.message.text
     try:
@@ -159,34 +201,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if awaiting == "remember":
             context.user_data.pop("awaiting")
-            append_to_log(f"**Запомнить:** {text}")
-            await update.message.reply_text(f"Запомнил: {text}", reply_markup=MENU)
+            if demo:
+                await update.message.reply_text("🔒 Это демо — запись в память недоступна.", reply_markup=MENU)
+                log_message(user.id, uname, fname, "demo", text, "🔒 demo blocked")
+            else:
+                append_to_log(f"**Запомнить:** {text}")
+                reply_text = f"Запомнил: {text}"
+                await update.message.reply_text(reply_text, reply_markup=MENU)
+                log_message(user.id, uname, fname, "remember", text, reply_text)
             return
 
         if awaiting == "forget":
             context.user_data.pop("awaiting")
-            append_to_log(f"**Удалить из памяти:** {text}")
-            await update.message.reply_text(
-                f"Отметил для удаления: {text}\nПримени при следующей компиляции памяти.",
-                reply_markup=MENU,
-            )
+            if demo:
+                await update.message.reply_text("🔒 Это демо — изменение памяти недоступно.", reply_markup=MENU)
+                log_message(user.id, uname, fname, "demo", text, "🔒 demo blocked")
+            else:
+                append_to_log(f"**Удалить из памяти:** {text}")
+                reply_text = f"Отметил для удаления: {text}\nПримени при следующей компиляции памяти."
+                await update.message.reply_text(reply_text, reply_markup=MENU)
+                log_message(user.id, uname, fname, "forget", text, reply_text)
             return
 
         if text == "🚀 Обновить дашборд":
+            if demo:
+                await update.message.reply_text("🔒 Это демо — обновление дашборда недоступно.", reply_markup=MENU)
+                return
             append_to_log("**Кнопка:** 🚀 Обновить дашборд")
             repo_url = os.environ.get("GITHUB_REPO_URL", "")
             if not repo_url:
                 await update.message.reply_text("⚠️ GITHUB_REPO_URL не настроен.", reply_markup=MENU)
                 return
             try:
-                subprocess.run(["git", "-C", "/app", "add", "memory/"], check=True, capture_output=True)
+                subprocess.run(["git", "-C", GIT_ROOT, "add", "memory/"], check=True, capture_output=True)
                 commit = subprocess.run(
-                    ["git", "-C", "/app", "commit", "-m", "bot: update memory"],
+                    ["git", "-C", GIT_ROOT, "commit", "-m", "bot: update memory"],
                     capture_output=True,
                 )
                 if commit.returncode not in (0, 1):
                     raise RuntimeError("git commit failed")
-                subprocess.run(["git", "-C", "/app", "push", repo_url, "main"], check=True, capture_output=True)
+                subprocess.run(["git", "-C", GIT_ROOT, "push", repo_url, "main"], check=True, capture_output=True)
                 await update.message.reply_text("✅ Дашборд обновлён — данные памяти отправлены на GitHub.", reply_markup=MENU)
             except Exception:
                 logger.exception("Ошибка обновления дашборда")
@@ -195,6 +249,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if text == "📚 Курсы":
             append_to_log("**Кнопка:** 📚 Курсы")
+            log_message(user.id, uname, fname, "button", "📚 Курсы")
             await update.message.reply_text(
                 "Выбери курс:",
                 reply_markup=kb_courses_keyboard(),
@@ -203,47 +258,84 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if text == "📊 Прогресс":
             reply = ask_groq(
-                "Покажи мой текущий прогресс по вайбкодингу: что пройдено, streak, оценки понимания."
+                "Покажи мой текущий прогресс по вайбкодингу: что пройдено, streak, оценки понимания.",
+                demo=demo,
             )
-            append_to_log(f"**Кнопка:** 📊 Прогресс\n**Bot:** {reply}")
+            if not demo:
+                append_to_log(f"**Кнопка:** 📊 Прогресс\n**Bot:** {reply}")
+            log_message(user.id, uname, fname, "button" if not demo else "demo", "📊 Прогресс", reply)
             await _reply_md(update, reply, reply_markup=MENU)
             return
 
         if text == "📅 План":
             reply = ask_groq(
-                "Помоги составить план на сегодня с учётом моих целей и прогресса в учёбе."
+                "Помоги составить план на сегодня с учётом моих целей и прогресса в учёбе.",
+                demo=demo,
             )
-            append_to_log(f"**Кнопка:** 📅 План\n**Bot:** {reply}")
+            if not demo:
+                append_to_log(f"**Кнопка:** 📅 План\n**Bot:** {reply}")
+            log_message(user.id, uname, fname, "button" if not demo else "demo", "📅 План", reply)
             await _reply_md(update, reply, reply_markup=MENU)
             return
 
         if text == "🔥 Стрик":
             reply = ask_groq(
-                "Посчитай мой текущий streak по логам: сколько дней подряд я занимался? "
-                "Считай строки '**Стрик:** день учёбы засчитан' и записи об учёбе в логах."
+                "Покажи мой текущий стрик из раздела ## Streak в learning.md: "
+                "сколько дней подряд (поле 'Текущий: N дней подряд') и когда последний день учёбы. "
+                "Если стрик 0 — скажи об этом и предложи нажать '✅ Стрик +1' чтобы начать.",
+                demo=demo,
             )
-            append_to_log(f"**Кнопка:** 🔥 Стрик\n**Bot:** {reply}")
+            if not demo:
+                append_to_log(f"**Кнопка:** 🔥 Стрик\n**Bot:** {reply}")
+            log_message(user.id, uname, fname, "button" if not demo else "demo", "🔥 Стрик", reply)
             await _reply_md(update, reply, reply_markup=MENU)
             return
 
         if text == "✅ Стрик +1":
-            update_streak()
-            append_to_log("**Стрик:** день учёбы засчитан ✅")
-            await update.message.reply_text("День засчитан! Стрик продолжается 🔥", reply_markup=MENU)
+            if demo:
+                await update.message.reply_text("🔒 Это демо — запись стрика недоступна.", reply_markup=MENU)
+                log_message(user.id, uname, fname, "demo", "✅ Стрик +1", "🔒 demo blocked")
+            else:
+                update_streak()
+                append_to_log("**Стрик:** день учёбы засчитан ✅")
+                await update.message.reply_text("День засчитан! Стрик продолжается 🔥", reply_markup=MENU)
+                log_message(user.id, uname, fname, "button", "✅ Стрик +1", "День засчитан! 🔥")
             return
 
         if text == "🧠 Запомнить":
             context.user_data["awaiting"] = "remember"
+            log_message(user.id, uname, fname, "button", "🧠 Запомнить")
             await update.message.reply_text("Что запомнить?", reply_markup=MENU)
             return
 
         if text == "🗑️ Забыть":
             context.user_data["awaiting"] = "forget"
+            log_message(user.id, uname, fname, "button", "🗑️ Забыть")
             await update.message.reply_text("Что забыть?", reply_markup=MENU)
             return
 
-        reply = ask_groq(text)
-        append_to_log(f"**User:** {text}\n**Bot:** {reply}")
+        # Авто-отметка тренировки: детектируем день + факт выполнения
+        if not demo:
+            day = detect_workout_day(text)
+            if day and mark_workout_done(day):
+                append_to_log(f"**Тренировка:** {day} отмечена ✅")
+                try:
+                    subprocess.run(["git", "-C", GIT_ROOT, "add", "memory/compiled/goals.md"], check=True, capture_output=True)
+                    subprocess.run(["git", "-C", GIT_ROOT, "commit", "-m", f"bot: mark workout {day} done"], check=True, capture_output=True)
+                    repo_url = os.environ.get("GITHUB_REPO_URL", "")
+                    if repo_url:
+                        subprocess.run(["git", "-C", GIT_ROOT, "push", repo_url, "main"], check=True, capture_output=True)
+                except Exception:
+                    logger.exception("Ошибка git push после отметки тренировки")
+                reply_text = f"✅ Тренировка в {day} отмечена в дашборде!"
+                log_message(user.id, uname, fname, "workout", text, reply_text)
+                await update.message.reply_text(reply_text, reply_markup=MENU)
+                return
+
+        reply = ask_groq(text, demo=demo)
+        if not demo:
+            append_to_log(f"**User:** {text}\n**Bot:** {reply}")
+        log_message(user.id, uname, fname, "message" if not demo else "demo", text, reply)
         await _reply_md(update, reply, reply_markup=MENU)
 
     except Exception as e:
@@ -253,7 +345,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if not query or query.from_user.id != ALLOWED_USER_ID:
+    if not query:
         return
     await query.answer()
     data = query.data
@@ -306,8 +398,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_allowed(update):
-        return
+    demo = not is_allowed(update)
+    user = update.effective_user
     try:
         await update.message.reply_text("🎤 Слушаю...", reply_markup=MENU)
 
@@ -325,8 +417,10 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(f"🗣️ {text}", reply_markup=MENU)
 
-        reply = ask_groq(text)
-        append_to_log(f"**Voice:** {text}\n**Bot:** {reply}")
+        reply = ask_groq(text, demo=demo)
+        if not demo:
+            append_to_log(f"**Voice:** {text}\n**Bot:** {reply}")
+        log_message(user.id, user.username or "", user.full_name or "", "voice" if not demo else "demo_voice", text, reply)
         await _reply_md(update, reply, reply_markup=MENU)
 
     except Exception as e:
