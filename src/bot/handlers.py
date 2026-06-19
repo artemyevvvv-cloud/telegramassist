@@ -15,7 +15,16 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_USER_ID = int(os.environ["ALLOWED_USER_ID"])
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "")
-GIT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+
+def _find_git_root() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=str(Path(__file__).parent),
+        capture_output=True, text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else str(Path(__file__).resolve().parent.parent.parent)
+
+GIT_ROOT = _find_git_root()
 
 groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
 MODEL = "llama-3.3-70b-versatile"
