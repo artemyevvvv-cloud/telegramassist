@@ -136,7 +136,7 @@ def _git_push(files: list[str], label: str):
         diff = subprocess.run(["git", "-C", GIT_ROOT, "diff", "--staged", "--quiet"], capture_output=True)
         if diff.returncode == 0:
             return  # нечего коммитить
-        subprocess.run(["git", "-C", GIT_ROOT, "commit", "-m", f"bot: {label}"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", GIT_ROOT, "-c", "user.email=bot@bot.com", "-c", "user.name=bot", "commit", "-m", f"bot: {label}"], check=True, capture_output=True)
         subprocess.run(["git", "-C", GIT_ROOT, "push", repo_url, "main"], check=True, capture_output=True)
     except Exception:
         logger.exception("Ошибка git push (%s)", label)
