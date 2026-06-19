@@ -6,7 +6,7 @@ from pathlib import Path
 from groq import Groq
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
-from memory import read_context, append_to_log, update_streak, detect_workout_day, mark_workout_done
+from memory import read_context, append_to_log, update_streak, detect_workout_day, mark_workout_done, detect_learning, detect_work
 from db import init_db, log_message
 
 init_db()
@@ -344,7 +344,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = ask_groq(text, demo=demo)
         if not demo:
             append_to_log(f"**User:** {text}\n**Bot:** {reply}")
-            _git_push(["memory/raw/"], "sync raw log")
+            push_files = ["memory/raw/"]
+            if detect_learning(text):
+                update_streak()
+                push_files.append("memory/compiled/learning.md")
+            if detect_work(text):
+                push_files.append("memory/compiled/goals.md")
+            _git_push(push_files, "auto sync")
         log_message(user.id, uname, fname, "message" if not demo else "demo", text, reply)
         await _reply_md(update, reply, reply_markup=MENU)
 
@@ -440,6 +446,13 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = ask_groq(text, demo=demo)
         if not demo:
             append_to_log(f"**Voice:** {text}\n**Bot:** {reply}")
+            push_files = ["memory/raw/"]
+            if detect_learning(text):
+                update_streak()
+                push_files.append("memory/compiled/learning.md")
+            if detect_work(text):
+                push_files.append("memory/compiled/goals.md")
+            _git_push(push_files, "auto sync voice")
         log_message(user.id, user.username or "", user.full_name or "", "voice" if not demo else "demo_voice", text, reply)
         await _reply_md(update, reply, reply_markup=MENU)
 
