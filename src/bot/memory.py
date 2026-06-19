@@ -95,18 +95,33 @@ def parse_module_progress(text: str) -> tuple[int, int] | None:
 
 
 def update_learning_status(module: int, lesson: int) -> bool:
-    """Обновляет '## Текущий статус' в learning.md. Возвращает True если изменение сделано."""
+    """Обновляет статус модуля в learning.md: переключает эмодзи и ## Текущий статус."""
     path = MEMORY_PATH / "compiled" / "learning.md"
     if not path.exists():
         return False
     content = path.read_text(encoding="utf-8")
     name = _MODULE_NAMES.get(module, f"Модуль {module}")
+
+    # Обновляем текстовую строку статуса
     new_status = f"## Текущий статус\nНачат Модуль {module} — «{name}», Урок {lesson}"
+    new_content = re.sub(r'## Текущий статус\n.*', new_status, content)
+
+    # Снимаем 🔶 с прежнего активного модуля (кроме текущего)
     new_content = re.sub(
-        r'## Текущий статус\n.*',
-        new_status,
-        content,
+        rf'^(### )🔶( Модуль (?!{module}:)\d+:.+?)(?:\s*\(В ПРОЦЕССЕ\))?$',
+        r'\1✅\2',
+        new_content,
+        flags=re.MULTILINE,
     )
+
+    # Ставим 🔶 на текущий модуль (если он ещё ⬜)
+    new_content = re.sub(
+        rf'^(### )⬜( Модуль {module}:.+)$',
+        r'\1🔶\2 (В ПРОЦЕССЕ)',
+        new_content,
+        flags=re.MULTILINE,
+    )
+
     if new_content == content:
         return False
     path.write_text(new_content, encoding="utf-8")
